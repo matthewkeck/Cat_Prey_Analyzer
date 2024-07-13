@@ -1,12 +1,7 @@
-import RPi.GPIO as GPIO
-from picamera.array import PiRGBArray
-from picamera import PiCamera
-from gpiozero import CPUTemperature
-
+from picamera2 import Picamera2, Preview
 from collections import deque
 import pytz
 from datetime import datetime
-from threading import Thread
 import time
 import sys
 import cv2
@@ -14,35 +9,36 @@ import numpy as np
 import io, gc
 
 class Camera:
-    def __init__(self,):
-        IRPin = 36
-        # GPIO Stuff
-        GPIO.setmode(GPIO.BOARD)
-        GPIO.setup(IRPin, GPIO.OUT)
-        GPIO.output(IRPin, GPIO.LOW)
-
-        time.sleep(2)
+    def __init__(self):
+        # Initialize Picamera2
+        self.picam2 = Picamera2()
+        self.picam2.preview_configuration.main.size = (2592, 1944)
+        self.picam2.preview_configuration.main.format = 'RGB888'
+        self.picam2.preview_configuration.align()
+        self.picam2.configure("preview")
+        self.picam2.start()
 
     def fill_queue(self, deque):
-        while(1):
+        while True:
             gc.collect()
-            camera = PiCamera()
-            camera.framerate = 3
-            camera.vflip = False
-            camera.hflip = False
-            camera.resolution = (2592, 1944)
-            camera.exposure_mode = 'sports'
-            stream = io.BytesIO()
-            for i, frame in enumerate(camera.capture_continuous(stream, format="jpeg", use_video_port=True)):
-                stream.seek(0)
-                data = np.frombuffer(stream.getvalue(), dtype=np.uint8)
-                image = cv2.imdecode(data, 1)
-                deque.append(
-                    (datetime.now(pytz.timezone('Europe/Zurich')).strftime("%Y_%m_%d_%H-%M-%S.%f"), image))
-                #deque.pop()
-                print("Quelength: " + str(len(deque)) + "\tStreamsize: " + str(sys.getsizeof(stream)))
-                if i == 60:
-                    print("Loop ended, starting over.")
-                    camera.close()
-                    del camera
-                    break
+            frame = self.picam2.capture_array()
+            image = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            deque.append((datetime.now(pytz.timezone('Europe/Zurich')).strftime("%Y_%m_%d_%H-%M-%S.%f"), image))
+            
+            # Optionally remove the oldest item if the deque exceeds a certain size
+            if len(deque) > 60:
+                deque.popleft()
+                
+            print("Queue length: " + str(len(deque)) + "\tFrame size: " + str(sys.getsizeof(frame)))
+            
+            # Sleep to control frame rate
+            time.sleep(1 / 3)  # 3 frames per second
+
+# Example usage
+if __name__ == "__main__":
+    # Initialize the deque with a max length if needed
+    image_deque = deque(maxlen=100)
+    cam = Camera()
+    cam.fill_queue(image_deque)
+
+
