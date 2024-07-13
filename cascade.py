@@ -7,20 +7,27 @@ from collections import deque
 from threading import Thread
 from multiprocessing import Process
 import telegram
-from telegram.ext import Updater, CommandHandler, Filters, MessageHandler
+from telegram import Update 
+# from telegram.ext import Application, ApplicationBuilder, Updater, CommandHandler, filters, MessageHandler, ContextTypes
 import xml.etree.ElementTree as ET
+import asyncio
+import logging
 
-sys.path.append('/home/pi/CatPreyAnalyzer')
+sys.path.append('/home/pi/Cat_Prey_Analyzer')
 sys.path.append('/home/pi')
-from CatPreyAnalyzer.model_stages import PC_Stage, FF_Stage, Eye_Stage, Haar_Stage, CC_MobileNet_Stage
-from CatPreyAnalyzer.camera_class import Camera
+from Cat_Prey_Analyzer.model_stages import PC_Stage, FF_Stage, Eye_Stage, Haar_Stage, CC_MobileNet_Stage
+from Cat_Prey_Analyzer.camera_class import Camera
 cat_cam_py = str(Path(os.getcwd()).parents[0])
 
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
 class Spec_Event_Handler():
     def __init__(self):
-        self.img_dir = os.path.join(cat_cam_py, 'CatPreyAnalyzer/debug/input')
-        self.out_dir = os.path.join(cat_cam_py, 'CatPreyAnalyzer/debug/output')
+        self.img_dir = os.path.join(cat_cam_py, 'Cat_Prey_Analyzer/debug/input')
+        self.out_dir = os.path.join(cat_cam_py, 'Cat_Prey_Analyzer/debug/output')
 
         self.img_list = [x for x in sorted(os.listdir(self.img_dir)) if'.jpg' in x]
         self.base_cascade = Cascade()
@@ -60,8 +67,8 @@ class Spec_Event_Handler():
                 single_cascade.ff_bbs_inference_time,
                 single_cascade.ff_haar_inference_time,
                 single_cascade.pc_inference_time]))
-            print("Total Inference Time:", single_cascade.total_inference_time)
-            print('Total Runtime:', time.time() - start_time)
+            # print("Total Inference Time:", single_cascade.total_inference_time)
+            # print('Total Runtime:', time.time() - start_time)
 
             # Write img to output dir and log csv of each event
             cv2.imwrite(os.path.join(self.out_dir, single_cascade.img_name), single_cascade.output_img)
@@ -70,7 +77,7 @@ class Spec_Event_Handler():
 class Sequential_Cascade_Feeder():
     def __init__(self):
         self.log_dir = os.path.join(os.getcwd(), 'log')
-        print('Log Dir:', self.log_dir)
+        # print('Log Dir:', self.log_dir)
         self.event_nr = 0
         self.base_cascade = Cascade()
         self.DEFAULT_FPS_OFFSET = 2
@@ -86,13 +93,18 @@ class Sequential_Cascade_Feeder():
         self.event_reset_counter = 0
         self.cumulus_points = 0
         self.cumulus_prey_threshold = -10
+        # self.cumulus_no_prey_threshold = 0 
         self.cumulus_no_prey_threshold = 2.9603
         self.prey_val_hard_threshold = 0.6
         self.face_counter = 0
         self.PREY_FLAG = None
         self.NO_PREY_FLAG = None
         self.queues_cumuli_in_event = []
+
+        # print("starting telegram")
         self.bot = NodeBot()
+        # print("tellegram done")
+        
         self.processing_pool = []
         self.main_deque = deque()
 
@@ -118,10 +130,10 @@ class Sequential_Cascade_Feeder():
 
         #terminate processes when pool too large
         if len(self.processing_pool) >= self.MAX_PROCESSES:
-            print('terminating oldest processes Len:', len(self.processing_pool))
+            # print('terminating oldest processes Len:', len(self.processing_pool))
             for p in self.processing_pool[0:int(len(self.processing_pool)/2)]:
                 p.terminate()
-            print('Now processes Len:', len(self.processing_pool))
+            # print('Now processes Len:', len(self.processing_pool))
 
     def log_event_to_csv(self, event_obj, queues_cumuli_in_event, event_nr):
         csv_name = 'event_log.csv'
@@ -145,6 +157,22 @@ class Sequential_Cascade_Feeder():
                                  'PC_Class':img_obj.pc_prey_class, 'PC_Val':img_obj.pc_prey_val,
                                  'PC_Time':img_obj.pc_inference_time, 'Total_Time':img_obj.total_inference_time})
 
+    def saveImage(self, image, image_type):
+        current_directory = os.getcwd()
+        # print(f"Current Directory: {current_directory}")
+        # Get the current date and time
+        current_time = datetime.now()
+        
+        # Format the date and time as a string
+        timestamp_str = current_time.strftime("%Y%m%d_%H%M%S")
+        
+        # Create the filename with the timestamp
+        filename = f"images/{image_type}/image_{timestamp_str}.jpg"
+        # Construct a file path in the current directory
+        file_path = os.path.join(current_directory, filename)
+        cv2.imwrite(file_path, image)
+
+
     def send_prey_message(self, event_objects, cumuli):
         prey_vals = [x.pc_prey_val for x in event_objects]
         max_prey_index = prey_vals.index(max(filter(lambda x: x is not None, prey_vals)))
@@ -152,15 +180,18 @@ class Sequential_Cascade_Feeder():
         event_str = ''
         face_events = [x for x in event_objects if x.face_bool]
         for f_event in face_events:
-            print('****************')
-            print('Img_Name:', f_event.img_name)
-            print('PC_Val:', str('%.2f' % f_event.pc_prey_val))
-            print('****************')
+            # print('****************')
+            # print('Img_Name:', f_event.img_name)
+            # print('PC_Val:', str('%.2f' % f_event.pc_prey_val))
+            # print('****************')
             event_str += '\n' + f_event.img_name + ' => PC_Val: ' + str('%.2f' % f_event.pc_prey_val)
 
         sender_img = event_objects[max_prey_index].output_img
         caption = 'Cumuli: ' + str(cumuli) + ' => PREY IN DA HOUSE!' + ' 🐁🐁🐁' + event_str
-        self.bot.send_img(img=sender_img, caption=caption)
+        
+        self.saveImage(sender_img, "badCat")
+
+        # self.bot.send_img(img=sender_img, caption=caption)
         return
 
     def send_no_prey_message(self, event_objects, cumuli):
@@ -170,30 +201,37 @@ class Sequential_Cascade_Feeder():
         event_str = ''
         face_events = [x for x in event_objects if x.face_bool]
         for f_event in face_events:
-            print('****************')
-            print('Img_Name:', f_event.img_name)
-            print('PC_Val:', str('%.2f' % f_event.pc_prey_val))
-            print('****************')
+            # print('****************')
+            # print('Img_Name:', f_event.img_name)
+            # print('PC_Val:', str('%.2f' % f_event.pc_prey_val))
+            # print('****************')
             event_str += '\n' + f_event.img_name + ' => PC_Val: ' + str('%.2f' % f_event.pc_prey_val)
 
         sender_img = event_objects[min_prey_index].output_img
         caption = 'Cumuli: ' + str(cumuli) + ' => Cat is clean...' + ' 🐱' + event_str
-        self.bot.send_img(img=sender_img, caption=caption)
+        # print(caption)
+        self.saveImage(sender_img, "goodCat")
+        # await self.bot.send_img(img=sender_img, caption=caption)
         return
 
     def send_dk_message(self, event_objects, cumuli):
         event_str = ''
         face_events = [x for x in event_objects if x.face_bool]
         for f_event in face_events:
-            print('****************')
-            print('Img_Name:', f_event.img_name)
-            print('PC_Val:', str('%.2f' % f_event.pc_prey_val))
-            print('****************')
+            # print('****************')
+            # print('Img_Name:', f_event.img_name)
+            # print('PC_Val:', str('%.2f' % f_event.pc_prey_val))
+            # print('****************')
             event_str += '\n' + f_event.img_name + ' => PC_Val: ' + str('%.2f' % f_event.pc_prey_val)
 
         sender_img = face_events[0].output_img
+        
         caption = 'Cumuli: ' + str(cumuli) + ' => Cant say for sure...' + ' 🤷‍♀️' + event_str + '\nMaybe use /letin?'
-        self.bot.send_img(img=sender_img, caption=caption)
+        # print(caption)
+    
+        self.saveImage(sender_img, "unsure")
+    
+        # await self.bot.send_img(img=sender_img, caption=caption)
         return
 
     def get_event_nr(self):
@@ -205,17 +243,18 @@ class Sequential_Cascade_Feeder():
 
         return imgNr
 
+   
     def queque_worker(self):
-        print('Working the Queque with len:', len(self.main_deque))
+        # print('Working the Queque with len:', len(self.main_deque))
         start_time = time.time()
         #Feed the latest image in the Queue through the cascade
         cascade_obj = self.feed(target_img=self.main_deque[self.fps_offset][1], img_name=self.main_deque[self.fps_offset][0])[1]
-        print('Runtime:', time.time() - start_time)
+        # print('Runtime:', time.time() - start_time)
         done_timestamp = datetime.now(pytz.timezone('Europe/Zurich')).strftime("%Y_%m_%d_%H-%M-%S.%f")
-        print('Timestamp at Done Runtime:', done_timestamp)
+        # print('Timestamp at Done Runtime:', done_timestamp)
 
         overhead = datetime.strptime(done_timestamp, "%Y_%m_%d_%H-%M-%S.%f") - datetime.strptime(self.main_deque[self.fps_offset][0], "%Y_%m_%d_%H-%M-%S.%f")
-        print('Overhead:', overhead.total_seconds())
+        # print('Overhead:', overhead.total_seconds())
 
         #Add this such that the bot has some info
         self.bot.node_queue_info = len(self.main_deque)
@@ -242,26 +281,29 @@ class Sequential_Cascade_Feeder():
                 self.cumulus_points += (50 - int(round(100 * cascade_obj.pc_prey_val)))
                 self.FACE_FOUND_FLAG = True
 
-            print('CUMULUS:', self.cumulus_points)
+            # print('CUMULUS:', self.cumulus_points)
             self.queues_cumuli_in_event.append((len(self.main_deque),self.cumulus_points, done_timestamp))
 
             #Check the cumuli points and set flags if necessary
             if self.face_counter > 0 and self.PATIENCE_FLAG:
                 if self.cumulus_points / self.face_counter > self.cumulus_no_prey_threshold:
                     self.NO_PREY_FLAG = True
-                    print('NO PREY DETECTED... YOU CLEAN...')
-                    p = Process(target=self.send_no_prey_message, args=(self.event_objects, self.cumulus_points / self.face_counter,), daemon=True)
-                    p.start()
-                    self.processing_pool.append(p)
-                    #self.log_event_to_csv(event_obj=self.event_objects, queues_cumuli_in_event=self.queues_cumuli_in_event, event_nr=self.event_nr)
+        
+                    # print('NO PREY DETECTED... YOU CLEAN...')
+
+                    # p = asyncio.create_task(self.send_no_prey_message(self.event_objects, self.cumulus_points / self.face_counter))
+                    #p = Process(target=self.send_no_prey_message, args=(self.event_objects, self.cumulus_points / self.face_counter,), daemon=True)
+                    #p.start()
+                    #self.processing_pool.append(p)
+                    self.log_event_to_csv(event_obj=self.event_objects, queues_cumuli_in_event=self.queues_cumuli_in_event, event_nr=self.event_nr)
                     self.reset_cumuli_et_al()
                 elif self.cumulus_points / self.face_counter < self.cumulus_prey_threshold:
                     self.PREY_FLAG = True
-                    print('IT IS A PREY!!!!!')
-                    p = Process(target=self.send_prey_message, args=(self.event_objects, self.cumulus_points / self.face_counter,), daemon=True)
-                    p.start()
-                    self.processing_pool.append(p)
-                    #self.log_event_to_csv(event_obj=self.event_objects, queues_cumuli_in_event=self.queues_cumuli_in_event, event_nr=self.event_nr)
+                    # print('IT IS A PREY!!!!!')
+                    #p = Process(target=self.send_prey_message, args=(self.event_objects, self.cumulus_points / self.face_counter,), daemon=True)
+                    #p.start()
+                    #self.processing_pool.append(p)
+                    self.log_event_to_csv(event_obj=self.event_objects, queues_cumuli_in_event=self.queues_cumuli_in_event, event_nr=self.event_nr)
                     self.reset_cumuli_et_al()
                 else:
                     self.NO_PREY_FLAG = False
@@ -272,19 +314,19 @@ class Sequential_Cascade_Feeder():
 
         #No cat detected => reset event_counters if necessary
         else:
-            print('NO CAT FOUND!')
+            # print('NO CAT FOUND!')
             self.event_reset_counter += 1
             if self.event_reset_counter >= self.event_reset_threshold:
                 # If was True => event now over => clear queque
                 if self.EVENT_FLAG == True:
-                    print('CLEARED QUEQUE BECAUSE EVENT OVER WITHOUT CONCLUSION...')
+                    # print('CLEARED QUEQUE BECAUSE EVENT OVER WITHOUT CONCLUSION...')
                     #TODO QUICK FIX
                     if self.face_counter == 0:
                         self.face_counter = 1
-                    p = Process(target=self.send_dk_message, args=(self.event_objects, self.cumulus_points / self.face_counter,), daemon=True)
-                    p.start()
-                    self.processing_pool.append(p)
-                    #self.log_event_to_csv(event_obj=self.event_objects, queues_cumuli_in_event=self.queues_cumuli_in_event, event_nr=self.event_nr)
+                    #p = Process(target=self.send_dk_message, args=(self.event_objects, self.cumulus_points / self.face_counter,), daemon=True)
+                    #p.start()
+                    #self.processing_pool.append(p)
+                    self.log_event_to_csv(event_obj=self.event_objects, queues_cumuli_in_event=self.queues_cumuli_in_event, event_nr=self.event_nr)
                 self.reset_cumuli_et_al()
 
         if self.EVENT_FLAG and self.FACE_FOUND_FLAG:
@@ -293,16 +335,19 @@ class Sequential_Cascade_Feeder():
             self.PATIENCE_FLAG = True
         if self.face_counter > 1:
             self.PATIENCE_FLAG = True
-
+    
+    async def tempSender(self, image):
+        await self.bot.send_img(img=image, caption="caption")
+ 
     def single_debug(self):
         start_time = time.time()
         target_img_name = 'dummy_img.jpg'
-        target_img = cv2.imread(os.path.join(cat_cam_py, 'CatPreyAnalyzer/readme_images/lenna_casc_Node1_001557_02_2020_05_24_09-49-35.jpg'))
+        target_img = cv2.imread(os.path.join(cat_cam_py, 'Cat_Prey_Analyzer/readme_images/lenna_casc_Node1_001557_02_2020_05_24_09-49-35.jpg'))
         cascade_obj = self.feed(target_img=target_img, img_name=target_img_name)[1]
-        print('Runtime:', time.time() - start_time)
+        # print('Runtime:', time.time() - start_time)
         return cascade_obj
 
-    def queque_handler(self):
+    async def queque_handler(self):
         # Do this to force run all networks s.t. the network inference time stabilizes
         self.single_debug()
 
@@ -311,30 +356,31 @@ class Sequential_Cascade_Feeder():
         camera_thread.start()
 
         while(True):
+            # print("\n\n\n========================================\n\n\n")
             if len(self.main_deque) > self.QUEQUE_MAX_THRESHOLD:
                 self.main_deque.clear()
                 self.reset_cumuli_et_al()
                 # Clean up garbage
                 gc.collect()
-                print('DELETING QUEQUE BECAUSE OVERLOADED!')
-                self.bot.send_text(message='Running Hot... had to kill Queque!')
+                # print('DELETING QUEQUE BECAUSE OVERLOADED!')
+                await self.bot.send_text(message='Running Hot... had to kill Queque!')
 
             elif len(self.main_deque) > self.DEFAULT_FPS_OFFSET:
                 self.queque_worker()
 
             else:
-                print('Nothing to work with => Queque_length:', len(self.main_deque))
+                # print('Nothing to work with => Queque_length:', len(self.main_deque))
                 time.sleep(0.25)
 
             #Check if user force opens the door
             if self.bot.node_let_in_flag == True:
                 self.reset_cumuli_et_al()
                 open_time = 5
-                self.bot.send_text('Ok door is open for ' + str(open_time) + 's...')
+                await self.bot.send_text('Ok door is open for ' + str(open_time) + 's...')
                 time.sleep(open_time)
-                self.bot.send_text('Door locked again, back to business...')
+                await self.bot.send_text('Door locked again, back to business...')
 
-    def dummy_queque_handler(self):
+    async def dummy_queque_handler(self):
         # Do this to force run all networks s.t. the network inference time stabilizes
         self.single_debug()
 
@@ -345,23 +391,23 @@ class Sequential_Cascade_Feeder():
         while(True):
             if len(self.main_deque) > self.QUEQUE_MAX_THRESHOLD:
                 self.main_deque.clear()
-                print('DELETING QUEQUE BECAUSE OVERLOADED!')
-                self.bot.send_text(message='Running Hot... had to kill Queque!')
+                # print('DELETING QUEQUE BECAUSE OVERLOADED!')
+                await self.bot.send_text(message='Running Hot... had to kill Queque!')
 
             elif len(self.main_deque) > self.DEFAULT_FPS_OFFSET:
                 self.queque_worker()
 
             else:
-                print('Nothing to work with => Queque_length:', len(self.main_deque))
+                # print('Nothing to work with => Queque_length:', len(self.main_deque))
                 time.sleep(0.25)
 
             #Check if user force opens the door
             if self.bot.node_let_in_flag == True:
                 self.reset_cumuli_et_al()
                 open_time = 5
-                self.bot.send_text('Ok door is open for ' + str(open_time) + 's...')
+                await self.bot.send_text('Ok door is open for ' + str(open_time) + 's...')
                 time.sleep(open_time)
-                self.bot.send_text('Door locked again, back to business...')
+                await self.bot.send_text('Door locked again, back to business...')
 
     def feed(self, target_img, img_name):
         target_event_obj = Event_Element(img_name=img_name, cc_target_img=target_img)
@@ -377,7 +423,7 @@ class Sequential_Cascade_Feeder():
             single_cascade.ff_haar_inference_time,
             single_cascade.pc_inference_time]))
         total_runtime = time.time() - start_time
-        print('Total Runtime:', total_runtime)
+        # print('Total Runtime:', total_runtime)
 
         return total_runtime, single_cascade
 
@@ -419,22 +465,39 @@ class Cascade:
         self.eyes_stage = Eye_Stage()
         self.haar_stage = Haar_Stage()
 
+    def saveImage(self, image, image_type):
+        current_directory = os.getcwd()
+        print(f"Current Directory: {current_directory}")
+        # Get the current date and time
+        current_time = datetime.now()
+        
+        # Format the date and time as a string
+        timestamp_str = current_time.strftime("%Y%m%d_%H%M%S")
+        
+        # Create the filename with the timestamp
+        filename = f"images/{image_type}/image_{timestamp_str}.jpg"
+        # Construct a file path in the current directory
+        file_path = os.path.join(current_directory, filename)
+        cv2.imwrite(file_path, image)
+
     def do_single_cascade(self, event_img_object):
-        print(event_img_object.img_name)
+        # print(event_img_object.img_name)
         cc_target_img = event_img_object.cc_target_img
         original_copy_img = cc_target_img.copy()
 
         #Do CC
         start_time = time.time()
         dk_bool, cat_bool, bbs_target_img, pred_cc_bb_full, cc_inference_time = self.do_cc_mobile_stage(cc_target_img=cc_target_img)
-        print('CC_Do Time:', time.time() - start_time)
+        # print('\tCC_Do Time:', time.time() - start_time)
         event_img_object.cc_cat_bool = cat_bool
         event_img_object.cc_pred_bb = pred_cc_bb_full
         event_img_object.bbs_target_img = bbs_target_img
         event_img_object.cc_inference_time = cc_inference_time
 
         if cat_bool and bbs_target_img.size != 0:
-            print('Cat Detected!')
+            # print('\tCat Detected!')
+            self.saveImage(original_copy_img,"goodCat")
+
             rec_img = self.cc_mobile_stage.draw_rectangle(img=original_copy_img, box=pred_cc_bb_full, color=(255, 0, 0), text='CC_Pred')
 
             #Do HAAR
@@ -473,13 +536,13 @@ class Cascade:
 
             if face_bool:
                 rec_img = self.cc_mobile_stage.draw_rectangle(img=rec_img, box=inf_bb, color=(255, 255, 255), text='INF_Pred')
-                print('Face Detected!')
+                # print('\tFace Detected!')
 
                 #Do PC
                 pred_class, pred_val, inference_time = self.do_pc_stage(pc_target_img=snout_crop)
-                print('Prey Prediction: ' + str(pred_class))
-                print('Pred_Val: ', str('%.2f' % pred_val))
-                pc_str = ' PC_Pred: ' + str(pred_class) + ' @ ' + str('%.2f' % pred_val)
+                # print('\tPrey Prediction: ' + str(pred_class))
+                # print('\tPred_Val: ', str('%.2f' % pred_val))
+                pc_str = '\t PC_Pred: ' + str(pred_class) + ' @ ' + str('%.2f' % pred_val)
                 color = (0, 0, 255) if pred_class else (0, 255, 0)
                 rec_img = self.input_text(img=rec_img, text=pc_str, text_pos=(15, 100), color=color)
 
@@ -488,12 +551,12 @@ class Cascade:
                 event_img_object.pc_inference_time = inference_time
 
             else:
-                print('No Face Found...')
+                # print('\tNo Face Found...')
                 ff_str = 'No_Face'
                 rec_img = self.input_text(img=rec_img, text=ff_str, text_pos=(15, 100), color=(255, 255, 0))
 
         else:
-            print('No Cat Found...')
+            # print('\tNo Cat Found...')
             rec_img = self.input_text(img=original_copy_img, text='CC_Pred: NoCat', text_pos=(15, 100), color=(255, 255, 0))
 
         #Always save rec_img in event_img object
@@ -504,7 +567,7 @@ class Cascade:
         cc_area = abs(cc_bbs[0][0] - cc_bbs[1][0]) * abs(cc_bbs[0][1] - cc_bbs[1][1])
         haar_area = abs(haar_bbs[0][0] - haar_bbs[1][0]) * abs(haar_bbs[0][1] - haar_bbs[1][1])
         overlap = haar_area / cc_area
-        print('Overlap: ', overlap)
+        # print('\tOverlap: ', overlap)
         return overlap
 
     def infere_snout_crop(self, bbs, haar_bbs, bbs_face_bool, bbs_ff_conf, haar_face_bool, haar_ff_conf, cc_target_img):
@@ -625,12 +688,12 @@ class Cascade:
 class NodeBot():
     def __init__(self):
         #Insert Chat ID and Bot Token according to Telegram API
-        #self.CHAT_ID = 'xxxxxxxxxxxxx'
-        #self.BOT_TOKEN = 'xxxxxxxxxxxxx'
-
+        self.CHAT_ID = 6826655470
+        self.BOT_TOKEN = '7378240877:AAG2-XDD-6bOt4xKkossC2eGkRHXmttMMfk'
+        self.bot = telegram.Bot(self.BOT_TOKEN) 
         self.last_msg_id = 0
-        self.bot_updater = Updater(token=self.BOT_TOKEN)
-        self.bot_dispatcher = self.bot_updater.dispatcher
+        # self.bot_updater = Updater(token=self.BOT_TOKEN)
+        # self.bot_dispatcher = self.bot_updater.dispatcher
         self.commands = ['/help', '/nodestatus', '/sendlivepic', '/sendlastcascpic', '/letin', '/reboot']
 
         self.node_live_img = None
@@ -641,7 +704,7 @@ class NodeBot():
         self.node_let_in_flag = None
 
         #Init the listener
-        self.init_bot_listener()
+        # self.init_bot_listener()
 
     def init_bot_listener(self):
         telegram.Bot(token=self.BOT_TOKEN).send_message(chat_id=self.CHAT_ID, text='Good Morning, NodeBot is online!' + '🤙')
@@ -702,24 +765,43 @@ class NodeBot():
             bot_message = 'No info yet...'
         self.send_text(bot_message)
 
-    def send_text(self, message):
-        telegram.Bot(token=self.BOT_TOKEN).send_message(chat_id=self.CHAT_ID, text=message, parse_mode=telegram.ParseMode.MARKDOWN)
+    # def send_text(self, message):
+        # telegram.Bot(token=self.BOT_TOKEN).send_message(chat_id=self.CHAT_ID, text=message, parse_mode=telegram.ParseMode.MARKDOWN)
 
-    def send_img(self, img, caption):
-        cv2.imwrite('degubi.jpg', img)
-        telegram.Bot(token=self.BOT_TOKEN).send_photo(chat_id=self.CHAT_ID, photo=open('degubi.jpg', 'rb'), caption=caption)
+    # def send_img(self, img, caption):
+    #     cv2.imwrite('degubi.jpg', img)
+    #     telegram.Bot(token=self.BOT_TOKEN).send_photo(chat_id=self.CHAT_ID, photo=open('degubi.jpg', 'rb'), caption=caption)
+
+
+    async def send_text(self, message):
+        async with self.bot:
+            await self.bot.send_message(text=message, chat_id=self.CHAT_ID)
+
+    async def send_img(self, img, caption):
+        # Save the image using OpenCV
+        file_path = 'degubi.jpg'
+        cv2.imwrite(file_path, img)
+        # Send the image
+        async with self.bot:
+            with open(file_path, 'rb') as image_file:
+                await self.bot.send_photo(chat_id=self.CHAT_ID, photo=image_file, caption=caption)
 
 class DummyDQueque():
     def __init__(self):
-        self.target_img = cv2.imread(os.path.join(cat_cam_py, 'CatPreyAnalyzer/readme_images/lenna_casc_Node1_001557_02_2020_05_24_09-49-35.jpg'))
+        self.target_img = cv2.imread(os.path.join(cat_cam_py, 'Cat_Prey_Analyzer/readme_images/lenna_casc_Node1_001557_02_2020_05_24_09-49-35.jpg'))
 
     def dummy_queque_filler(self, main_deque):
         while(True):
             img_name = datetime.now(pytz.timezone('Europe/Zurich')).strftime("%Y_%m_%d_%H-%M-%S.%f")
             main_deque.append((img_name, self.target_img))
-            print("Took image, que-length:", main_deque.__len__())
+            # print("Took image, que-length:", main_deque.__len__())
             time.sleep(0.4)
 
-if __name__ == '__main__':
+async def main():
     sq_cascade = Sequential_Cascade_Feeder()
-    sq_cascade.queque_handler()
+    await sq_cascade.queque_handler()
+
+if __name__ == '__main__':
+    asyncio.run(main())
+
+
